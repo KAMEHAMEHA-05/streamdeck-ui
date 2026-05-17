@@ -96,28 +96,39 @@ export default function MediaPlayer({ file, torrentStream, playlist = [], onClos
   useEffect(() => {
     if (!torrentStream) return;
 
-    // Dynamically import WebTorrent (client-side only)
-    import('webtorrent').then((WebTorrent) => {
-      const client = new WebTorrent.default();
+    let statsInterval: ReturnType<typeof setInterval> | null = null;
+
+    import('webtorrent/dist/webtorrent.min.js').then((WebTorrent: any) => {
+      const WebTorrentClass = WebTorrent.default || WebTorrent;
+      const client = new WebTorrentClass();
+
       webTorrentRef.current = client;
 
       const magnetURI = `magnet:?xt=urn:btih:${torrentStream.infoHash}`;
-      
+
       client.add(magnetURI, (torrent: any) => {
         torrentRef.current = torrent;
 
-        const file = torrent.files[torrentStream.fileIdx || 0];
-        
-        file.renderTo(mediaRef.current!, { autoplay: true, controls: false }, (err: Error) => {
-          if (err) {
-            console.error('Error rendering:', err);
-            return;
-          }
-          setTorrentReady(true);
-        });
+        const selectedFile =
+          torrent.files[torrentStream.fileIdx || 0];
 
-        // Update stats periodically
-        const statsInterval = setInterval(() => {
+        selectedFile.renderTo(
+          mediaRef.current!,
+          {
+            autoplay: true,
+            controls: false,
+          },
+          (err: Error | null) => {
+            if (err) {
+              console.error("Error rendering torrent:", err);
+              return;
+            }
+
+            setTorrentReady(true);
+          }
+        );
+
+        statsInterval = setInterval(() => {
           setTorrentStats({
             downloaded: torrent.downloaded,
             downloadSpeed: torrent.downloadSpeed,
@@ -126,17 +137,22 @@ export default function MediaPlayer({ file, torrentStream, playlist = [], onClos
             progress: torrent.progress,
           });
         }, 1000);
-
-        return () => clearInterval(statsInterval);
       });
+    }).catch((err) => {
+      console.error("Failed to load WebTorrent:", err);
     });
 
     return () => {
+      if (statsInterval) clearInterval(statsInterval);
+
       if (torrentRef.current) {
         torrentRef.current.destroy();
+        torrentRef.current = null;
       }
+
       if (webTorrentRef.current) {
         webTorrentRef.current.destroy();
+        webTorrentRef.current = null;
       }
     };
   }, [torrentStream]);
@@ -356,7 +372,10 @@ export default function MediaPlayer({ file, torrentStream, playlist = [], onClos
 
       {/* ── Media area ─────────────────────────────────────────────── */}
       <div style={{
-        flex: 1, display: "flex", alignItems: "center", justifyContent: "center",
+        flex: 1,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
         padding: vidMode ? 0 : "40px 24px",
         overflow: "hidden",
         position: "relative",
@@ -365,49 +384,110 @@ export default function MediaPlayer({ file, torrentStream, playlist = [], onClos
           <video
             ref={mediaRef}
             src={!torrentStream ? file?.url : undefined}
-            style={{ maxWidth: "100%", maxHeight: "100%", display: "block", cursor: "pointer" }}
+            style={{
+              maxWidth: "100%",
+              maxHeight: "100%",
+              display: "block",
+              cursor: "pointer"
+            }}
             onClick={togglePlay}
             playsInline
           />
         ) : (
           <>
-            <audio ref={mediaRef as React.RefObject<HTMLAudioElement>} src={!torrentStream ? file?.url : undefined} />
+            <audio
+              ref={mediaRef as React.RefObject<HTMLAudioElement>}
+              src={!torrentStream ? file?.url : undefined}
+            />
             <div style={{
-              display: "flex", flexDirection: "column", alignItems: "center", gap: 28,
-              width: "100%", maxWidth: 480,
+              display: "flex",
+              flexDirection: "column",
+              alignItems: "center",
+              gap: 28,
+              width: "100%",
+              maxWidth: 480,
             }}>
               <div style={{
-                width: 200, height: 200,
+                width: 200,
+                height: 200,
                 border: "1px solid var(--border-strong)",
                 background: "var(--bg-card)",
-                display: "flex", alignItems: "center", justifyContent: "center",
-                position: "relative", overflow: "hidden",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                position: "relative",
+                overflow: "hidden",
               }}>
-                <div style={{ position: "absolute", inset: 0, display: "grid", gridTemplateColumns: "1fr 1fr", opacity: 0.06 }}>
+                <div style={{
+                  position: "absolute",
+                  inset: 0,
+                  display: "grid",
+                  gridTemplateColumns: "1fr 1fr",
+                  opacity: 0.06
+                }}>
                   {[...Array(4)].map((_, i) => (
-                    <div key={i} style={{ border: "1px solid var(--accent)", margin: 2 }} />
+                    <div
+                      key={i}
+                      style={{
+                        border: "1px solid var(--accent)",
+                        margin: 2
+                      }}
+                    />
                   ))}
                 </div>
-                <Music size={52} color="var(--accent)" style={{ opacity: playing ? 1 : 0.35, transition: "opacity 0.3s" }} />
+
+                <Music
+                  size={52}
+                  color="var(--accent)"
+                  style={{
+                    opacity: playing ? 1 : 0.35,
+                    transition: "opacity 0.3s"
+                  }}
+                />
+
                 {playing && (
                   <div style={{
-                    position: "absolute", bottom: 12, left: 0, right: 0,
-                    display: "flex", gap: 3, justifyContent: "center", alignItems: "flex-end", height: 20
+                    position: "absolute",
+                    bottom: 12,
+                    left: 0,
+                    right: 0,
+                    display: "flex",
+                    gap: 3,
+                    justifyContent: "center",
+                    alignItems: "flex-end",
+                    height: 20
                   }}>
                     {[8, 14, 6, 18, 10, 16, 7, 12].map((h, i) => (
-                      <div key={i} style={{
-                        width: 3, background: "var(--accent)",
-                        height: `${h}px`,
-                        animation: `bar-bounce 0.${5 + i}s ease-in-out infinite alternate`,
-                        animationDelay: `${i * 0.08}s`,
-                      }} />
+                      <div
+                        key={i}
+                        style={{
+                          width: 3,
+                          background: "var(--accent)",
+                          height: `${h}px`,
+                          animation: `bar-bounce 0.${5 + i}s ease-in-out infinite alternate`,
+                          animationDelay: `${i * 0.08}s`,
+                        }}
+                      />
                     ))}
                   </div>
                 )}
               </div>
+
               <div style={{ textAlign: "center" }}>
-                <div style={{ fontSize: "1rem", fontWeight: 600, color: "var(--text-primary)", marginBottom: 6 }}>{currentFile.name}</div>
-                <div style={{ fontSize: "0.72rem", color: "var(--text-muted)", letterSpacing: "0.08em", textTransform: "uppercase" }}>
+                <div style={{
+                  fontSize: "1rem",
+                  fontWeight: 600,
+                  color: "var(--text-primary)",
+                  marginBottom: 6
+                }}>
+                  {currentFile.name}
+                </div>
+                <div style={{
+                  fontSize: "0.72rem",
+                  color: "var(--text-muted)",
+                  letterSpacing: "0.08em",
+                  textTransform: "uppercase"
+                }}>
                   {ext(currentFile.name).toUpperCase()} · {fmtBytes(currentFile.size)}
                 </div>
               </div>
@@ -415,19 +495,110 @@ export default function MediaPlayer({ file, torrentStream, playlist = [], onClos
           </>
         )}
 
+        {/* Pause overlay */}
         {vidMode && !playing && loaded && (
           <div
             onClick={togglePlay}
             style={{
-              position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center",
-              cursor: "pointer", background: "rgba(0,0,0,0.25)"
+              position: "absolute",
+              inset: 0,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              cursor: "pointer",
+              background: "rgba(0,0,0,0.25)"
             }}
           >
             <div style={{
-              width: 64, height: 64, background: "rgba(201,168,76,0.9)",
-              display: "flex", alignItems: "center", justifyContent: "center",
+              width: 64,
+              height: 64,
+              background: "rgba(201,168,76,0.9)",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
             }}>
               <Play size={26} color="#0a0a0a" />
+            </div>
+          </div>
+        )}
+
+        {/* Connecting to peers overlay */}
+        {torrentStream && !torrentStats && !torrentReady && (
+          <div
+            style={{
+              position: "absolute",
+              inset: 0,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              background: "rgba(0,0,0,0.35)",
+              color: "white",
+              fontSize: "1rem",
+              fontWeight: 600,
+            }}
+          >
+            Connecting to peers...
+          </div>
+        )}
+
+        {/* Torrent buffering progress overlay */}
+        {torrentStream && torrentStats && !torrentReady && (
+          <div
+            style={{
+              position: "absolute",
+              bottom: 24,
+              left: 24,
+              right: 24,
+              maxWidth: 520,
+              margin: "0 auto",
+              background: "rgba(0, 0, 0, 0.75)",
+              border: "1px solid var(--border)",
+              padding: "12px 14px",
+              backdropFilter: "blur(8px)",
+            }}
+          >
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                marginBottom: 8,
+                fontSize: "0.72rem",
+                color: "var(--text-secondary)",
+              }}
+            >
+              <span>Buffering torrent...</span>
+              <span>{(torrentStats.progress * 100).toFixed(1)}%</span>
+            </div>
+
+            <div
+              style={{
+                height: 6,
+                background: "rgba(255,255,255,0.08)",
+                overflow: "hidden",
+              }}
+            >
+              <div
+                style={{
+                  height: "100%",
+                  width: `${torrentStats.progress * 100}%`,
+                  background: "var(--accent)",
+                  transition: "width 0.3s ease",
+                }}
+              />
+            </div>
+
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                marginTop: 8,
+                fontSize: "0.65rem",
+                color: "var(--text-muted)",
+              }}
+            >
+              <span>{fmtSpeed(torrentStats.downloadSpeed)}</span>
+              <span>{torrentStats.numPeers} peers</span>
+              <span>{fmtBytes(torrentStats.downloaded)}</span>
             </div>
           </div>
         )}

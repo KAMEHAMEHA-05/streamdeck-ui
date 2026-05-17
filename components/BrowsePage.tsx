@@ -15,6 +15,8 @@ import {
   type TMDBEpisode, type TMDBSeason, type TMDBCastMember,
 } from "@/lib/tmdb";
 import { useToast } from "@/lib/toast";
+import StreamSelector from "@/components/StreamSelector";
+import MediaPlayer, { type TorrentStream } from "@/components/MediaPlayer";
 
 // ─── Aliases ──────────────────────────────────────────────────────────────────
 type AnyMedia    = TMDBMovie | TMDBShow;
@@ -592,9 +594,9 @@ function EpisodeRow({ ep }: { ep: TMDBEpisode }) {
 // DETAIL PANEL (slides in from right)
 // ──────────────────────────────────────────────────────────────────────────────
 function DetailPanel({
-  id, type, onClose,
+  id, type, onClose, onPlay,
 }: {
-  id: number; type: DetailType; onClose: () => void;
+  id: number; type: DetailType; onClose: () => void; onPlay: (id: number, type: DetailType, title: string, season?: number, episode?: number) => void;
 }) {
   const [detail,       setDetail]       = useState<AnyDetail | null>(null);
   const [loading,      setLoading]      = useState(true);
@@ -889,9 +891,11 @@ function DetailPanel({
                   className="btn-primary" 
                   style={{ padding: "11px 30px" }}
                   onClick={() => {
-                    const mediaType = type === "movie" ? "movie" : "tv";
-                    const tmdbId = detail.id;
-                    setSelected({ id: tmdbId, type: mediaType, detail });
+                    if (type === "tv" && activeSeason) {
+                      onPlay(detail.id, type, title, activeSeason.season_number, 1);
+                    } else {
+                      onPlay(detail.id, type, title);
+                    }
                   }}
                 >
                   <Play size={15} /> Play
@@ -1134,6 +1138,50 @@ function SearchBar({
   );
 }
 
+
+export async function fetchTorrentioStreams(
+  imdbId: string,
+  mediaType: "movie" | "tv",
+  season?: number,
+  episode?: number
+) {
+  const workerBase = process.env.NEXT_PUBLIC_WORKER_URL!;
+
+  // Fetch configured base URL from your worker
+  const configRes = await fetch(`${workerBase}/config/torrentio`);
+  if (!configRes.ok) {
+    throw new Error("Failed to load Torrentio configuration");
+  }
+
+  const config = await configRes.json();
+  const base = config.base;
+
+  let torrentioUrl: string;
+
+  if (mediaType === "movie") {
+    torrentioUrl = `${base}/stream/movie/${imdbId}.json`;
+  } else {
+    if (season == null || episode == null) {
+      throw new Error("Season and episode are required for TV shows");
+    }
+
+    torrentioUrl =
+      `${base}/stream/series/${imdbId}:${season}:${episode}.json`;
+  }
+
+  const res = await fetch(torrentioUrl, {
+    headers: {
+      Accept: "application/json"
+    }
+  });
+
+  if (!res.ok) {
+    throw new Error(`Torrentio returned HTTP ${res.status}`);
+  }
+
+  return res.json();
+}
+
 // ──────────────────────────────────────────────────────────────────────────────
 // MAIN BROWSE PAGE
 // ──────────────────────────────────────────────────────────────────────────────
@@ -1146,6 +1194,20 @@ export default function BrowsePage() {
   const [selected,      setSelected]      = useState<{ id: number; type: DetailType } | null>(null);
   const [searchResults, setSearchResults] = useState<AnyMedia[]>([]);
   const [searchQuery,   setSearchQuery]   = useState("");
+  
+  // Stream selector state
+  const [showStreamSelector, setShowStreamSelector] = useState(false);
+  const [streamSelectorConfig, setStreamSelectorConfig] = useState<{
+    tmdbId: number;
+    mediaType: "movie" | "tv";
+    title: string;
+    season?: number;
+    episode?: number;
+  } | null>(null);
+
+  // Media player state
+  const [playingStream, setPlayingStream] = useState<TorrentStream | null>(null);
+
   const { toast } = useToast();
 
   const load = useCallback(async () => {
@@ -1171,6 +1233,24 @@ export default function BrowsePage() {
   const handleSearchResults = useCallback((r: AnyMedia[], q: string) => {
     setSearchResults(r);
     setSearchQuery(q);
+  }, []);
+
+  // Called from DetailPanel when Play is clicked
+  const handlePlayClick = useCallback((tmdbId: number, mediaType: DetailType, title: string, season?: number, episode?: number) => {
+    setStreamSelectorConfig({
+      tmdbId,
+      mediaType,
+      title,
+      season,
+      episode,
+    });
+    setShowStreamSelector(true);
+  }, []);
+
+  // Called from StreamSelector when a stream is selected
+  const handleStreamSelected = useCallback((stream: TorrentStream) => {
+    setPlayingStream(stream);
+    setShowStreamSelector(false);
   }, []);
 
   const hasSearch = searchResults.length > 0 || searchQuery.length > 0;
@@ -1340,6 +1420,35 @@ export default function BrowsePage() {
           id={selected.id}
           type={selected.type}
           onClose={() => setSelected(null)}
+          onPlay={handlePlayClick}
+        />
+      )}
+
+      {/* ════════════════ STREAM SELECTOR ════════════════ */}
+      {showStreamSelector && streamSelectorConfig && (
+        <StreamSelector
+          tmdbId={streamSelectorConfig.tmdbId}
+          mediaType={streamSelectorConfig.mediaType}
+          title={streamSelectorConfig.title}
+          season={streamSelectorConfig.season}
+          episode={streamSelectorConfig.episode}
+          onSelect={handleStreamSelected}
+          fetchStreams={fetchTorrentioStreams}
+          onClose={() => {
+            setShowStreamSelector(false);
+            setStreamSelectorConfig(null);
+          }}
+        />
+      )}
+
+      {/* ════════════════ MEDIA PLAYER ════════════════ */}
+      {playingStream && streamSelectorConfig && (
+        <MediaPlayer
+          torrentStream={playingStream}
+          onClose={() => {
+            setPlayingStream(null);
+            setStreamSelectorConfig(null);
+          }}
         />
       )}
     </div>

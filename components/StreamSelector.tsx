@@ -26,6 +26,13 @@ interface Props {
   episode?: number;
   onSelect: (stream: TorrentStream) => void;
   onClose: () => void;
+
+  fetchStreams: (
+    imdbId: string,
+    mediaType: "movie" | "tv",
+    season?: number,
+    episode?: number
+  ) => Promise<any>;
 }
 
 export default function StreamSelector({
@@ -36,33 +43,75 @@ export default function StreamSelector({
   episode,
   onSelect,
   onClose,
+  fetchStreams,
 }: Props) {
   const [streams, setStreams] = useState<TorrentStream[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    const workerUrl = process.env.NEXT_PUBLIC_WORKER_URL || '';
-    let endpoint = `${workerUrl}/torrentio/${mediaType}/${tmdbId}`;
-    
-    if (mediaType === "tv" && season && episode) {
-      endpoint += `?season=${season}&episode=${episode}`;
+
+    if (typeof fetchStreams !== "function") {
+    setError("fetchStreams prop was not provided");
+    setLoading(false);
+    return;
+}
+    let cancelled = false;
+
+    async function loadStreams() {
+        try {
+        setLoading(true);
+        setError(null);
+
+        // First resolve TMDb ID -> IMDb ID using your existing backend route.
+        const workerUrl = process.env.NEXT_PUBLIC_WORKER_URL || "";
+        const externalEndpoint =
+            mediaType === "movie"
+            ? `${workerUrl}/tmdb/movie/${tmdbId}/external_ids`
+            : `${workerUrl}/tmdb/show/${tmdbId}/external_ids`;
+
+        const externalRes = await fetch(externalEndpoint);
+
+        if (!externalRes.ok) {
+            throw new Error("Failed to resolve IMDb ID");
+        }
+
+        const externalJson = await externalRes.json();
+        const externalData = externalJson.data || externalJson;
+        const imdbId = externalData.imdb_id;
+
+        if (!imdbId) {
+            throw new Error("IMDb ID not found");
+        }
+
+        // Fetch Torrentio directly from the browser.
+        const data = await fetchStreams(
+            imdbId,
+            mediaType,
+            season,
+            episode
+        );
+
+        if (!cancelled) {
+            setStreams(data.streams || []);
+        }
+        } catch (err: any) {
+        if (!cancelled) {
+            setError(err?.message || "Failed to load streams");
+        }
+        } finally {
+        if (!cancelled) {
+            setLoading(false);
+        }
+        }
     }
 
-    fetch(endpoint)
-      .then(res => {
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        return res.json();
-      })
-      .then((data: StreamResponse) => {
-        setStreams(data.streams || []);
-        setLoading(false);
-      })
-      .catch(err => {
-        setError(err.message || "Failed to load streams");
-        setLoading(false);
-      });
-  }, [tmdbId, mediaType, season, episode]);
+    loadStreams();
+
+    return () => {
+        cancelled = true;
+    };
+    }, [tmdbId, mediaType, season, episode, fetchStreams]);
 
   // Parse quality from stream name
   const getQuality = (name: string) => {
