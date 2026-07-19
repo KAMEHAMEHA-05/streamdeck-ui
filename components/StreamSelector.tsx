@@ -2,7 +2,7 @@
 import { useState, useEffect } from "react";
 import { Play, X, Download, Users, HardDrive, Zap, Film, Tv2 } from "lucide-react";
 
-interface TorrentStream {
+export interface TorrentStream {
   name: string;
   title: string;
   infoHash: string;

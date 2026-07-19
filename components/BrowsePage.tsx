@@ -15,8 +15,10 @@ import {
   type TMDBEpisode, type TMDBSeason, type TMDBCastMember,
 } from "@/lib/tmdb";
 import { useToast } from "@/lib/toast";
-import StreamSelector from "@/components/StreamSelector";
-import MediaPlayer, { type TorrentStream } from "@/components/MediaPlayer";
+//import StreamSelector from "@/components/StreamSelector";
+// import MediaPlayer, { type TorrentStream } from "@/components/StreamSelector";
+import StreamSelector, { type TorrentStream } from "@/components/StreamSelector";
+import MediaPlayer from "@/components/MediaPlayer";
 
 // ─── Aliases ──────────────────────────────────────────────────────────────────
 type AnyMedia    = TMDBMovie | TMDBShow;
@@ -241,7 +243,8 @@ function HeroBanner({
   const [prev, setPrev]     = useState<number | null>(null);
   const [fading, setFading] = useState(false);
   const [logos, setLogos]   = useState<Record<number, string | null>>({});
-  const timerRef = useRef<ReturnType<typeof setTimeout>>();
+  //const timerRef = useRef<ReturnType<typeof setTimeout>>();
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const goTo = useCallback((next: number) => {
     if (fading) return;
@@ -256,7 +259,9 @@ function HeroBanner({
 
   useEffect(() => {
     timerRef.current = setTimeout(() => goTo((idx + 1) % pool.length), 7000);
-    return () => clearTimeout(timerRef.current);
+    return () => {
+      timerRef.current && clearTimeout(timerRef.current);
+    };
   }, [idx, pool.length, goTo]);
 
   // Fetch logos for items from backend
@@ -1100,15 +1105,29 @@ function SearchBar({
 }) {
   const [q,      setQ]      = useState("");
   const [active, setActive] = useState(false);
-  const debounce = useRef<ReturnType<typeof setTimeout>>();
+  const debounce = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
-    clearTimeout(debounce.current);
-    if (!q.trim()) { onResults([], ""); return; }
+    if (debounce.current !== null) {
+      clearTimeout(debounce.current);
+    }
+
+    if (!q.trim()) {
+      onResults([], "");
+      return;
+    }
+
     debounce.current = setTimeout(() => {
-      searchTMDB(q).then(r => onResults(r as AnyMedia[], q)).catch(() => onResults([], q));
+      searchTMDB(q)
+        .then((r) => onResults(r as AnyMedia[], q))
+        .catch(() => onResults([], q));
     }, 380);
-    return () => clearTimeout(debounce.current);
+
+    return () => {
+      if (debounce.current !== null) {
+        clearTimeout(debounce.current);
+      }
+    };
   }, [q, onResults]);
 
   return (
@@ -1248,10 +1267,53 @@ export default function BrowsePage() {
   }, []);
 
   // Called from StreamSelector when a stream is selected
-  const handleStreamSelected = useCallback((stream: TorrentStream) => {
-    setPlayingStream(stream);
-    setShowStreamSelector(false);
-  }, []);
+  const handleStreamSelected = useCallback(
+    async (stream: TorrentStream) => {
+      try {
+        const apiBase =
+          process.env.NEXT_PUBLIC_TORR_URL || "http://localhost:8000";
+
+        // Build magnet from info hash
+        const magnet = `magnet:?xt=urn:btih:${stream.infoHash}`;
+
+        // Add torrent to backend/qBittorrent
+        const res = await fetch(`${apiBase}/torrent/add`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            magnet,
+          }),
+        });
+
+        if (!res.ok) {
+          const text = await res.text();
+          throw new Error(`Failed to add torrent: ${text}`);
+        }
+
+        const data = await res.json();
+        console.log("Torrent added:", data);
+
+        // Use returned hash (normalized by qBittorrent)
+        setPlayingStream({
+          ...stream,
+          infoHash: data.hash,
+        });
+
+        setShowStreamSelector(false);
+      } catch (err) {
+        console.error(err);
+        toast(
+          err instanceof Error
+            ? err.message
+            : "Failed to add torrent",
+          "error"
+        );
+      }
+    },
+    [toast]
+  );
 
   const hasSearch = searchResults.length > 0 || searchQuery.length > 0;
 
@@ -1444,7 +1506,25 @@ export default function BrowsePage() {
       {/* ════════════════ MEDIA PLAYER ════════════════ */}
       {playingStream && streamSelectorConfig && (
         <MediaPlayer
-          torrentStream={playingStream}
+          file={{
+            name:
+              playingStream.behaviorHints?.filename ||
+              `${streamSelectorConfig.title}${
+                streamSelectorConfig.mediaType === "movie"
+                  ? ".mkv"
+                  : ` S${String(streamSelectorConfig.season ?? 1).padStart(2, "0")}E${String(streamSelectorConfig.episode ?? 1).padStart(2, "0")}.mkv`
+              }`,
+
+            // Your FastAPI server will prepend NEXT_PUBLIC_API_URL automatically
+            url: `/torrent/${playingStream.infoHash}/file/${encodeURIComponent(
+              playingStream.behaviorHints?.filename || ""
+            )}`,
+
+            size: 0,
+
+            // Used by MediaPlayer to poll torrent stats
+            torrentHash: playingStream.infoHash,
+          }}
           onClose={() => {
             setPlayingStream(null);
             setStreamSelectorConfig(null);
